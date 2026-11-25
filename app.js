@@ -562,16 +562,23 @@ function renderSettings() {
       <p class="small muted">האפליקציה תיצור ב-Drive שלך קובץ אקסל אחד (<b>${esc(DRIVE_FILE_NAME)}</b>) ותעדכן אותו לבד אחרי כל טיסה או טיפול. בלי אינטרנט – יעודכן כשהחיבור יחזור. לאפליקציה יש גישה רק לקובץ שהיא עצמה יצרה, לא לשאר ה-Drive.</p>
       <button class="btn primary block" id="gcon">התחבר ל-Google Drive</button>
     </div>`;
-  view.innerHTML = `${driveCard}
+  // With Drive connected the backup is automatic: show only a small optional card.
+  const manualCard = drive.connected() ? `
     <div class="card">
-      <h2>${drive.connected() ? 'שמירת עותק ידני' : 'גיבוי לאקסל'}</h2>
+      <h2>עותק ידני / שחזור (לא חובה)</h2>
+      <p class="small muted">הגיבוי כבר נעשה אוטומטית ל-Drive. כאן אפשר לשמור עותק נוסף למכשיר, או לשחזר נתונים מקובץ אקסל.</p>
+      <div class="btns"><button class="btn" id="exp">⤓ שמור עותק</button><button class="btn" id="imp">⤒ ייבוא מאקסל</button></div>
+    </div>` : `
+    <div class="card">
+      <h2>גיבוי לאקסל</h2>
       <p class="small muted">הקובץ נשמר באותו מבנה של הקובץ המקורי שלך (גיליון טיסות + גיליון תחזוקה עם נוסחאות), ובנוסף גיליון היסטוריית טיפולים. אפשר לפתוח אותו באקסל גם בלי האפליקציה, ולייבא אותו בחזרה בכל זמן.</p>
       <div class="btns"><button class="btn primary" id="exp">⤓ שמור קובץ אקסל</button><button class="btn" id="imp">⤒ ייבוא מאקסל</button></div>
       ${fsa ? `<hr class="sep"><div class="row"><div><b>סנכרון אוטומטי לקובץ</b><div class="small muted">${linked.handle ? `מקושר ל-<b>${esc(linked.name)}</b>${linked.ok ? ' · כל שינוי נכתב מיד' : ' · נדרש אישור גישה'}` : 'בחר קובץ (למשל בתיקיית OneDrive) והאפליקציה תעדכן אותו אחרי כל שינוי'}</div></div>
         ${linked.handle ? `<div class="btns" style="flex:0 0 auto">${linked.ok ? '' : '<button class="btn sm primary" id="grant">אשר גישה</button>'}<button class="btn sm" id="unlink">נתק</button></div>` : '<button class="btn sm" id="link">קשר קובץ</button>'}</div>` : ''}
       <hr class="sep">
       <label class="checks"><label style="border:0;padding:0"><input type="checkbox" id="auto" ${S.settings.autoBackup ? 'checked' : ''}> להציע שמירת אקסל אחרי כל טיסה${fsa ? ' (כשאין קובץ מקושר)' : ''}</label></label>
-    </div>
+    </div>`;
+  view.innerHTML = `${driveCard}${manualCard}
     <div class="card">
       <h2>🪂 מצנח רזרבי</h2>
       <div class="row" style="gap:8px">
@@ -598,7 +605,7 @@ function renderSettings() {
   $('#imp').onclick = () => $('#fileExcel').click();
   $('#jexp').onclick = () => saveBlob(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }), `ppg-logbook-${todayISO()}.json`);
   $('#jimp').onclick = () => $('#fileJson').click();
-  $('#auto').onchange = e => { S.settings.autoBackup = e.target.checked; save(false); };
+  const auto = $('#auto'); if (auto) auto.onchange = e => { S.settings.autoBackup = e.target.checked; save(false); };
   $('#rDate').onchange = e => { S.settings.reserveRepack = e.target.value; save(); renderSettings(); };
   $('#rMon').onchange = e => { S.settings.reserveMonths = parseInt(e.target.value, 10) || 6; save(); renderSettings(); };
   $('#eng').onchange = e => { S.engineName = e.target.value.trim() || 'יומן מנוע'; save(); };
