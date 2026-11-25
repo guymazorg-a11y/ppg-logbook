@@ -92,8 +92,8 @@ function freshState() {
     components: DEFAULT_COMPONENTS.map(([name, intervalH, intervalMonths, notes, checkH]) => ({ id: uid(), name, intervalH, intervalMonths, lastResetH: 0, lastResetDate: '', notes, checkH, lastCheckH: 0 })),
     maint: [],         // {id, date, hours, items:[componentId replaced], checks:[componentId checked], note}
     sites: [],         // {name, lat, lon}
-    settings: { reserveRepack: '', reserveMonths: 6, autoBackup: true },
-    meta: { lastBackup: null, changesSinceBackup: 0 },
+    settings: { reserveRepack: '', reserveMonths: 6, autoBackup: true, drive: null }, // drive: {fileId, email}
+    meta: { lastBackup: null, changesSinceBackup: 0, drivePending: false },
   };
 }
 let S = load();
@@ -108,7 +108,7 @@ function save(changed = true) {
   if (changed) S.meta.changesSinceBackup = (S.meta.changesSinceBackup || 0) + 1;
   localStorage.setItem(STORE_KEY, JSON.stringify(S));
   updateHeader();
-  if (changed) scheduleLinkedWrite();
+  if (changed) { scheduleLinkedWrite(); if (drive.connected()) driveSync(true); }
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
@@ -181,7 +181,10 @@ function updateHeader() {
   $('#engineName').textContent = S.engineName || 'יומן מנוע';
   const el = $('#backupStatus');
   const n = S.meta.changesSinceBackup || 0;
-  if (linked.handle && linked.ok) { el.textContent = 'מסונכרן לקובץ אקסל'; el.classList.remove('stale'); }
+  if (drive.enabled() && drive.connected()) {
+    el.textContent = drive.syncing ? 'מעדכן את Google Drive…' : S.meta.drivePending ? `☁ ${n || ''} שינויים ממתינים לסנכרון` : '☁ מסונכרן ל-Google Drive';
+    el.classList.toggle('stale', !!S.meta.drivePending && !drive.syncing);
+  } else if (linked.handle && linked.ok) { el.textContent = 'מסונכרן לקובץ אקסל'; el.classList.remove('stale'); }
   else if (!S.meta.lastBackup) { el.textContent = S.flights.length ? 'עדיין לא נעשה גיבוי לאקסל' : ''; el.classList.toggle('stale', !!S.flights.length); }
   else {
     const d = new Date(S.meta.lastBackup);
@@ -213,7 +216,9 @@ function renderDash() {
   const last = sortedFlights()[0];
   const rs = reserveStatus();
   const alerts = [];
-  if ((S.meta.changesSinceBackup || 0) >= 1 && !(linked.handle && linked.ok))
+  if (drive.connected() && S.meta.drivePending)
+    alerts.push(`<div class="alert warn"><span>☁</span><span>יש שינויים שעוד לא עודכנו ב-Google Drive${navigator.onLine ? '' : ' (אין חיבור – יעודכן אוטומטית כשיחזור)'}.</span><button class="btn sm" id="bk">סנכרן</button></div>`);
+  else if ((S.meta.changesSinceBackup || 0) >= 1 && !(linked.handle && linked.ok) && !drive.connected())
     alerts.push(`<div class="alert info"><span>💾</span><span>יש ${S.meta.changesSinceBackup} שינויים שעוד לא נשמרו לקובץ האקסל.</span><button class="btn sm" id="bk">גבה עכשיו</button></div>`);
   if (rs && rs.level !== 'ok')
     alerts.push(`<div class="alert ${rs.level}"><span>🪂</span><span>${rs.days < 0 ? `קיפול רזרבי באיחור של ${-rs.days} ימים` : `קיפול רזרבי בעוד ${rs.days} ימים`} (אחרון: ${fmtDate(rs.last).slice(3)})</span></div>`);
@@ -540,9 +545,26 @@ function openComponent(id) {
 function renderSettings() {
   const fsa = 'showSaveFilePicker' in window;
   const rs = reserveStatus();
-  view.innerHTML = `
+  const d = S.settings.drive;
+  const driveCard = !drive.enabled() ? '' : drive.connected() ? `
     <div class="card">
-      <h2>גיבוי לאקסל</h2>
+      <h2>☁ סנכרון אוטומטי ל-Google Drive</h2>
+      <p class="small">מחובר${d.email ? ` כ-<b class="num">${esc(d.email)}</b>` : ''}. אחרי כל שמירה הקובץ <b>${esc(DRIVE_FILE_NAME)}</b> מתעדכן אוטומטית (אותו קובץ, בלי עותקים).
+      ${S.meta.drivePending ? '<br><span class="s-warn">יש שינויים שממתינים לסנכרון.</span>' : S.meta.lastBackup ? `<br><span class="muted">עודכן לאחרונה: ${new Date(S.meta.lastBackup).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' })}</span>` : ''}</p>
+      <div class="btns">
+        <button class="btn primary" id="gsync">סנכרן עכשיו</button>
+        <a class="btn" href="https://drive.google.com/file/d/${esc(d.fileId)}/view" target="_blank" rel="noopener">פתח ב-Drive</a>
+        <button class="btn" id="gdis">נתק</button>
+      </div>
+    </div>` : `
+    <div class="card">
+      <h2>☁ סנכרון אוטומטי ל-Google Drive</h2>
+      <p class="small muted">האפליקציה תיצור ב-Drive שלך קובץ אקסל אחד (<b>${esc(DRIVE_FILE_NAME)}</b>) ותעדכן אותו לבד אחרי כל טיסה או טיפול. בלי אינטרנט – יעודכן כשהחיבור יחזור. לאפליקציה יש גישה רק לקובץ שהיא עצמה יצרה, לא לשאר ה-Drive.</p>
+      <button class="btn primary block" id="gcon">התחבר ל-Google Drive</button>
+    </div>`;
+  view.innerHTML = `${driveCard}
+    <div class="card">
+      <h2>${drive.connected() ? 'שמירת עותק ידני' : 'גיבוי לאקסל'}</h2>
       <p class="small muted">הקובץ נשמר באותו מבנה של הקובץ המקורי שלך (גיליון טיסות + גיליון תחזוקה עם נוסחאות), ובנוסף גיליון היסטוריית טיפולים. אפשר לפתוח אותו באקסל גם בלי האפליקציה, ולייבא אותו בחזרה בכל זמן.</p>
       <div class="btns"><button class="btn primary" id="exp">⤓ שמור קובץ אקסל</button><button class="btn" id="imp">⤒ ייבוא מאקסל</button></div>
       ${fsa ? `<hr class="sep"><div class="row"><div><b>סנכרון אוטומטי לקובץ</b><div class="small muted">${linked.handle ? `מקושר ל-<b>${esc(linked.name)}</b>${linked.ok ? ' · כל שינוי נכתב מיד' : ' · נדרש אישור גישה'}` : 'בחר קובץ (למשל בתיקיית OneDrive) והאפליקציה תעדכן אותו אחרי כל שינוי'}</div></div>
@@ -567,7 +589,12 @@ function renderSettings() {
       <button class="btn danger block" id="wipe">מחק את כל הנתונים במכשיר</button>
     </div>
     <p class="small muted" style="text-align:center">הנתונים נשמרים מקומית במכשיר הזה בלבד. גבה לאקסל באופן קבוע.</p>`;
-  $('#exp').onclick = () => exportExcel();
+  $('#exp').onclick = async () => { // always a local copy, even when Drive is connected
+    try { if (await saveBlob(await workbookBlob(), 'Paramotor Flights.xlsx')) toast('קובץ האקסל נשמר ✓'); } catch (e) { console.error(e); toast('שגיאה ביצירת האקסל'); }
+  };
+  const gcon = $('#gcon'); if (gcon) gcon.onclick = driveConnect;
+  const gsync = $('#gsync'); if (gsync) gsync.onclick = async () => { await exportExcel(); renderSettings(); };
+  const gdis = $('#gdis'); if (gdis) gdis.onclick = async () => { if (await confirmBox('לנתק את הסנכרון ל-Google Drive? הקובץ יישאר ב-Drive.', 'נתק')) { driveDisconnect(); renderSettings(); } };
   $('#imp').onclick = () => $('#fileExcel').click();
   $('#jexp').onclick = () => saveBlob(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }), `ppg-logbook-${todayISO()}.json`);
   $('#jimp').onclick = () => $('#fileJson').click();
@@ -703,6 +730,13 @@ async function workbookBlob() { const wb = await buildWorkbook(); return new Blo
 function markBackedUp() { S.meta.lastBackup = Date.now(); S.meta.changesSinceBackup = 0; save(false); if (tab === 'dash') renderDash(); }
 
 async function exportExcel() {
+  if (drive.connected()) {
+    toast('מעדכן את Google Drive…');
+    if (await driveSync(true)) toast('הקובץ ב-Google Drive עודכן ✓');
+    else toast(navigator.onLine ? 'העדכון ל-Drive נכשל, ננסה שוב אוטומטית' : 'אין חיבור – יעודכן כשיחזור האינטרנט', 4000);
+    if (tab === 'dash') renderDash();
+    return;
+  }
   try {
     if (linked.handle && (await ensurePermission(true))) { await writeLinked(); toast(`נשמר ל-${linked.name}`); return; }
     const blob = await workbookBlob();
@@ -728,7 +762,7 @@ async function saveBlob(blob, name) {
   return true;
 }
 function afterChangeBackup() {
-  if (linked.handle && linked.ok) return; // already written automatically
+  if ((linked.handle && linked.ok) || drive.connected()) return; // already written automatically
   if (!S.settings.autoBackup) return;
   setTimeout(() => openModal(`<h3>לשמור גיבוי אקסל עכשיו?</h3><p class="muted small">כך תמיד יהיה לך קובץ עדכני גם בלי האפליקציה.${/Android|iPhone|iPad/i.test(navigator.userAgent) ? ' בחלון השיתוף בחר OneDrive / Drive / קבצים.' : ''}</p>
     <div class="btns"><button class="btn" id="later">אחר כך</button><button class="btn primary" id="now">⤓ שמור אקסל</button></div>`, card => {
@@ -885,7 +919,7 @@ $('#fileExcel').addEventListener('change', async e => {
       if (r.reserve) S.settings.reserveRepack = r.reserve;
       if (r.reserveMonths) S.settings.reserveMonths = r.reserveMonths;
       S.meta.lastBackup = Date.now(); S.meta.changesSinceBackup = 0; // the source file is an up-to-date backup
-      save(false); scheduleLinkedWrite(); closeModal(); toast(`יובאו ${r.flights.length} טיסות`); go('dash');
+      save(false); scheduleLinkedWrite(); if (drive.connected()) driveSync(true); closeModal(); toast(`יובאו ${r.flights.length} טיסות`); go('dash');
     };
   });
 });
@@ -894,6 +928,7 @@ $('#fileExcel').addEventListener('change', async e => {
 updateHeader();
 go('dash');
 consumeSharedFiles();
+driveInit();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 // expose for testing
 window.__ppg = { parseTrack, importExcel, buildWorkbook, get state() { return S; }, hm, parseHM, compStatus, totalHours };
