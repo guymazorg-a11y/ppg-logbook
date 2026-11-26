@@ -905,7 +905,12 @@ async function importExcel(file) {
 $('#fileExcel').addEventListener('change', async e => {
   const file = e.target.files[0]; e.target.value = ''; if (!file) return;
   let r;
-  try { r = await importExcel(file); } catch (err) { console.error(err); return toast('לא הצלחתי לקרוא את קובץ האקסל'); }
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await file.arrayBuffer());
+    if (!isOwnFormat(wb)) return openMapper(wb, file.name); // another pilot's layout → column picker
+    r = await importExcel(file);
+  } catch (err) { console.error(err); return toast('לא הצלחתי לקרוא את קובץ האקסל (צריך קובץ ‎.xlsx)'); }
   const hours = r.flights.reduce((a, f) => a + f.min, 0) / 60;
   openModal(`<h3>ייבוא מ-${esc(file.name)}</h3>
     <div class="track-info">
